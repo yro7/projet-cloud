@@ -2,6 +2,5 @@ projetmodia.md
 var.md
 SSOT.md
 *.lock
-*.md
 .terraform
 .terraform.lock.hcl
