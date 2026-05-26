@@ -25,11 +25,11 @@
         path: /opt/spark/bin/spark-submit
       register: spark_binary
 
-    - name: Télécharger Apache Spark 3.4.0 avec Hadoop 3
-      get_url:
-        url: "https://archive.apache.org/dist/spark/spark-3.4.0/spark-3.4.0-bin-hadoop3.tgz"
-        dest: "/tmp/spark-3.4.0-bin-hadoop3.tgz"
-        mode: '0644'
+    - name: Télécharger Apache Spark 3.4.0 avec Hadoop 3 (via curl, plus robuste)
+      shell: |
+        curl -L -o /tmp/spark-3.4.0-bin-hadoop3.tgz "https://archive.apache.org/dist/spark/spark-3.4.0/spark-3.4.0-bin-hadoop3.tgz"
+      args:
+        creates: /tmp/spark-3.4.0-bin-hadoop3.tgz
       when: not spark_binary.stat.exists
 
     - name: Créer le répertoire d'installation /opt/spark
