@@ -9,3 +9,7 @@
 
 - name: Configuration et déploiement des nœuds Workers (Agents)
   import_playbook: worker.yml
+
+- name: Déploiement et configuration d'Apache Spark
+  import_playbook: spark.yml
+

@@ -1,0 +1,93 @@
+---
+- name: Préparation et optimisation des nœuds Workers pour Spark
+  hosts: workers
+  become: yes
+  tasks:
+    - name: Prepull l'image conteneur Spark sur les workers pour un démarrage instantané des jobs
+      shell: |
+        k3s ctr images pull docker.io/apache/spark:v3.4.0
+      register: pull_image
+      changed_when: "'sharing' not in pull_image.stdout"
+
+
+- name: Installation et configuration d'Apache Spark sur le Master
+  hosts: masters
+  become: yes
+  tasks:
+    - name: Installer OpenJDK 11 (Standard de l'écosystème Spark/Hadoop)
+      apt:
+        name: openjdk-11-jdk
+        state: present
+        update_cache: yes
+
+    - name: Vérifier si Apache Spark est déjà installé
+      stat:
+        path: /opt/spark/bin/spark-submit
+      register: spark_binary
+
+    - name: Télécharger Apache Spark 3.4.0 avec Hadoop 3
+      get_url:
+        url: "https://archive.apache.org/dist/spark/spark-3.4.0/spark-3.4.0-bin-hadoop3.tgz"
+        dest: "/tmp/spark-3.4.0-bin-hadoop3.tgz"
+        mode: '0644'
+      when: not spark_binary.stat.exists
+
+    - name: Créer le répertoire d'installation /opt/spark
+      file:
+        path: /opt/spark
+        state: directory
+        mode: '0755'
+
+    - name: Extraire Apache Spark
+      unarchive:
+        src: "/tmp/spark-3.4.0-bin-hadoop3.tgz"
+        dest: "/opt/spark"
+        remote_src: yes
+        extra_opts: [--strip-components=1]
+      when: not spark_binary.stat.exists
+
+    - name: Supprimer l'archive temporaire
+      file:
+        path: "/tmp/spark-3.4.0-bin-hadoop3.tgz"
+        state: absent
+      when: not spark_binary.stat.exists
+
+    - name: Configurer les variables d'environnement globales (JAVA_HOME, SPARK_HOME, PATH)
+      copy:
+        content: |
+          # Configuration globale pour Apache Spark & Java (SSOT)
+          export JAVA_HOME=/usr/lib/jvm/java-11-openjdk-amd64
+          export SPARK_HOME=/opt/spark
+          export PATH=$PATH:$SPARK_HOME/bin:$SPARK_HOME/sbin
+        dest: /etc/profile.d/spark.sh
+        mode: '0644'
+
+    - name: Configurer les valeurs par défaut de l'écosystème Spark (conf/spark-defaults.conf)
+      copy:
+        content: |
+          # Valeurs par défaut pour la soumission des jobs sur Kubernetes
+          spark.master                                     k8s://https://10.0.1.10:6443
+          spark.kubernetes.namespace                       default
+          spark.kubernetes.container.image                 apache/spark:v3.4.0
+          spark.kubernetes.authenticate.driver.serviceAccountName spark
+          
+          # Allocation optimale des ressources (adaptation aux instances e2-medium)
+          spark.executor.instances                         2
+          spark.driver.memory                              1g
+          spark.executor.memory                            1g
+          spark.driver.cores                               1
+          spark.executor.cores                             1
+        dest: /opt/spark/conf/spark-defaults.conf
+        mode: '0644'
+
+    - name: Créer le ServiceAccount Kubernetes 'spark' dans le namespace default
+      shell: |
+        kubectl create serviceaccount spark --namespace=default --dry-run=client -o yaml | kubectl apply -f -
+      environment:
+        KUBECONFIG: /etc/rancher/k3s/k3s.yaml
+
+    - name: Associer le rôle d'édition au ServiceAccount 'spark'
+      shell: |
+        kubectl create clusterrolebinding spark-role --clusterrole=edit --serviceaccount=default:spark --namespace=default --dry-run=client -o yaml | kubectl apply -f -
+      environment:
+        KUBECONFIG: /etc/rancher/k3s/k3s.yaml
