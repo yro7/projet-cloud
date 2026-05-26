@@ -1,0 +1,15 @@
+---
+# Variables globales pour le cluster Kubernetes K3s
+
+# Utilisateur SSH par défaut pour se connecter aux instances GCE
+ansible_user: ubuntu
+
+# Jeton secret K3s servant à authentifier les nœuds Workers auprès du Master.
+# Ce jeton DOIT être identique à celui configuré dans Terraform pour garantir la cohérence.
+k3s_token: "K3sSuperSecretToken12345!"
+
+# Version stable de K3s à installer (laisse vide ou omet pour installer la dernière version)
+k3s_version: "v1.28.2+k3s1"
+
+# Chemin sur la machine locale (votre Mac) où la configuration kubeconfig sera récupérée
+local_kubeconfig_path: "~/.kube/config-projet-cloud"

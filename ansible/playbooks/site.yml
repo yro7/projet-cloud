@@ -1,0 +1,11 @@
+---
+# Playbook principal d'orchestration pour le Cluster Kubernetes K3s
+
+- name: Configuration commune de base sur tous les nœuds
+  import_playbook: common.yml
+
+- name: Configuration et déploiement du nœud Master (Control Plane)
+  import_playbook: master.yml
+
+- name: Configuration et déploiement des nœuds Workers (Agents)
+  import_playbook: worker.yml

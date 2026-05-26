@@ -1,0 +1,5 @@
+project_id          = "shining-incline-497512-k3"
+region              = "europe-west9"
+zone                = "europe-west9-b"
+ssh_username        = "ubuntu"
+ssh_public_key_file = "~/.ssh/id_rsa.pub"

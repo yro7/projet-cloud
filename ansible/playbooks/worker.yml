@@ -1,0 +1,24 @@
+---
+- name: Déploiement des Workers K3s
+  hosts: workers
+  become: yes
+  tasks:
+    - name: Vérifier si K3s est déjà installé sur le Worker
+      stat:
+        path: /usr/local/bin/k3s
+      register: k3s_binary
+
+    - name: Télécharger et installer K3s Agent (et joindre le cluster via l'IP interne du Master)
+      shell: |
+        curl -sfL https://get.k3s.io | \
+        K3S_TOKEN="{{ k3s_token }}" \
+        K3S_URL="https://10.0.1.10:6443" \
+        INSTALL_K3S_VERSION="{{ k3s_version }}" \
+        sh -
+      when: not k3s_binary.stat.exists
+
+    - name: S'assurer que le service K3s Agent est démarré et activé au boot
+      systemd:
+        name: k3s-agent
+        state: started
+        enabled: yes

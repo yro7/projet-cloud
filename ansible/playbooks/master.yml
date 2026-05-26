@@ -1,0 +1,45 @@
+---
+- name: Déploiement du Master K3s
+  hosts: masters
+  become: yes
+  tasks:
+    - name: Vérifier si K3s est déjà installé
+      stat:
+        path: /usr/local/bin/k3s
+      register: k3s_binary
+
+    - name: Télécharger et installer K3s Master (avec TLS-SAN pour l'IP publique et droits de lecture sur kubeconfig)
+      shell: |
+        curl -sfL https://get.k3s.io | \
+        K3S_TOKEN="{{ k3s_token }}" \
+        INSTALL_K3S_VERSION="{{ k3s_version }}" \
+        sh -s - server \
+        --tls-san="{{ ansible_host }}" \
+        --write-kubeconfig-mode "0644"
+      when: not k3s_binary.stat.exists
+
+    - name: Attendre que le fichier kubeconfig soit généré
+      wait_for:
+        path: /etc/rancher/k3s/k3s.yaml
+        state: present
+        timeout: 60
+
+    - name: S'assurer que le service K3s est démarré et activé au boot
+      systemd:
+        name: k3s
+        state: started
+        enabled: yes
+
+    - name: Récupérer le contenu du fichier kubeconfig du Master
+      slurp:
+        src: /etc/rancher/k3s/k3s.yaml
+      register: remote_kubeconfig
+
+    - name: Sauvegarder et adapter kubeconfig en local pour l'accès kubectl externe
+      delegate_to: localhost
+      become: no
+      copy:
+        content: "{{ (remote_kubeconfig.content | b64decode) | replace('127.0.0.1', ansible_host) }}"
+        dest: "{{ local_kubeconfig_path }}"
+        mode: '0600'
+      description: "Copie le fichier de configuration Kubernetes en local en remplaçant localhost par l'IP publique du Master GCP."

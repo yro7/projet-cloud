@@ -1,0 +1,33 @@
+---
+- name: Configuration de base de l'OS sur tous les nœuds
+  hosts: k8s
+  become: yes
+  tasks:
+    - name: Mettre à jour le cache apt et s'assurer que les paquets de base sont installés
+      apt:
+        update_cache: yes
+        name:
+          - curl
+          - git
+          - htop
+          - iptables
+          - ca-certificates
+        state: present
+
+    - name: Désactiver le swap immédiatement (requis standard Kubernetes)
+      command: swapoff -a
+      failed_when: false
+      changed_when: false
+
+    - name: Désactiver le swap de manière persistante dans /etc/fstab
+      replace:
+        path: /etc/fstab
+        regexp: '^([^#].*?\bswap\b.*?)$'
+        replace: '# \1'
+
+    - name: S'assurer que le service ufw est arrêté (le pare-feu GCP gère la sécurité)
+      systemd:
+        name: ufw
+        state: stopped
+        enabled: no
+      failed_when: false
