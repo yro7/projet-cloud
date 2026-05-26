@@ -35,6 +35,14 @@
         src: /etc/rancher/k3s/k3s.yaml
       register: remote_kubeconfig
 
+    - name: S'assurer que le dossier ~/.kube existe en local
+      delegate_to: localhost
+      become: no
+      file:
+        path: "~/.kube"
+        state: directory
+        mode: '0700'
+
     - name: Sauvegarder et adapter kubeconfig en local pour l'accès kubectl externe
       delegate_to: localhost
       become: no
@@ -42,4 +50,4 @@
         content: "{{ (remote_kubeconfig.content | b64decode) | replace('127.0.0.1', ansible_host) }}"
         dest: "{{ local_kubeconfig_path }}"
         mode: '0600'
-      description: "Copie le fichier de configuration Kubernetes en local en remplaçant localhost par l'IP publique du Master GCP."
+
