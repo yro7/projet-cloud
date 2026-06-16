@@ -1,4 +1,4 @@
-project_id          = "shining-incline-497512-k3"
+project_id          = "project-0209a452-648a-426d-a7b"
 region              = "europe-west9"
 zone                = "europe-west9-b"
 ssh_username        = "ubuntu"

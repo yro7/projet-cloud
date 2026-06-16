@@ -30,7 +30,7 @@ spark-submit \
   --conf spark.kubernetes.authenticate.driver.serviceAccountName=spark \
   --conf spark.kubernetes.container.image=apache/spark:v3.4.0 \
   local:///opt/spark/examples/jars/spark-examples_2.12-3.4.0.jar \
-  /opt/spark/README.md
+  /opt/spark/examples/src/main/resources/people.txt
 ```
 
 *(Note : K3s utilise des conteneurs légers, l'image `apache/spark:v3.4.0` contient l'application WordCount d'exemple préinstallée au chemin `local:///opt/spark/examples/...`)*
