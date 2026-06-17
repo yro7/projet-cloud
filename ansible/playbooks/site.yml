@@ -13,3 +13,6 @@
 - name: Déploiement et configuration d'Apache Spark
   import_playbook: spark.yml
 
+- name: Déploiement d'un cluster HDFS distribué (NameNode + DataNodes)
+  import_playbook: hdfs.yml
+

@@ -74,7 +74,10 @@
           
           # Configuration réseau pour résoudre le nom d'hôte interne GCP
           spark.driver.host                                10.0.1.10
-          
+
+          # Stockage distribué HDFS : les chemins nus résolvent vers le NameNode
+          spark.hadoop.fs.defaultFS                        hdfs://10.0.1.10:9000
+
           # Allocation optimale des ressources (adaptation aux instances e2-medium)
           spark.executor.instances                         2
           spark.driver.memory                              1g

@@ -12,3 +12,28 @@ grafana:
     dashboards:
       enabled: true
       label: grafana_dashboard
+
+# Scrape des métriques HDFS via l'endpoint natif Hadoop /prom
+# (active par hadoop.prometheus.endpoint.enabled=true dans core-site.xml).
+# Le pod Prometheus joint les IP des noeuds (10.0.1.x) en SNAT -> firewall interne OK.
+prometheus:
+  prometheusSpec:
+    additionalScrapeConfigs:
+      - job_name: hdfs-namenode
+        metrics_path: /prom
+        static_configs:
+          - targets: ['10.0.1.10:9870']
+            labels:
+              hdfs_role: namenode
+              node: k8s-master
+      - job_name: hdfs-datanodes
+        metrics_path: /prom
+        static_configs:
+          - targets: ['10.0.1.11:9864']
+            labels:
+              hdfs_role: datanode
+              node: k8s-worker-1
+          - targets: ['10.0.1.12:9864']
+            labels:
+              hdfs_role: datanode
+              node: k8s-worker-2

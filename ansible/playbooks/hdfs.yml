@@ -1,0 +1,289 @@
+---
+# Déploiement d'un vrai cluster HDFS distribué sur les VMs (natif, services systemd).
+# Topologie : NameNode sur le master (10.0.1.10), DataNodes sur les 2 workers.
+# Le client HDFS est déjà présent dans l'image Spark (apache/spark:v3.4.0 = bin-hadoop3)
+# et dans /opt/spark du driver : Spark lit donc hdfs://10.0.1.10:9000/ sans jar supplémentaire.
+
+# =====================================================================================
+# PLAY 1 : Installation de Hadoop + configuration commune sur TOUS les nœuds
+# =====================================================================================
+- name: Installation et configuration de base de Hadoop (NameNode + DataNodes)
+  hosts: k8s
+  become: yes
+  vars:
+    hadoop_version: "3.3.4"
+    hadoop_home: "/opt/hadoop"
+    namenode_ip: "10.0.1.10"
+  tasks:
+    - name: Installer OpenJDK 11 (requis par les démons HDFS sur chaque nœud)
+      apt:
+        name: openjdk-11-jdk
+        state: present
+        update_cache: yes
+
+    - name: Renseigner /etc/hosts pour la résolution des noms du cluster
+      blockinfile:
+        path: /etc/hosts
+        marker: "# {mark} ANSIBLE HDFS HOSTS"
+        block: |
+          10.0.1.10 k8s-master
+          10.0.1.11 k8s-worker-1
+          10.0.1.12 k8s-worker-2
+
+    - name: Vérifier si Hadoop est déjà installé
+      stat:
+        path: "{{ hadoop_home }}/bin/hdfs"
+      register: hadoop_binary
+
+    - name: Télécharger Hadoop {{ hadoop_version }} (via curl, plus robuste)
+      shell: |
+        curl -L -o /tmp/hadoop-{{ hadoop_version }}.tar.gz \
+          "https://archive.apache.org/dist/hadoop/common/hadoop-{{ hadoop_version }}/hadoop-{{ hadoop_version }}.tar.gz"
+      args:
+        creates: "/tmp/hadoop-{{ hadoop_version }}.tar.gz"
+      when: not hadoop_binary.stat.exists
+
+    - name: Créer le répertoire d'installation {{ hadoop_home }}
+      file:
+        path: "{{ hadoop_home }}"
+        state: directory
+        mode: '0755'
+
+    - name: Extraire Hadoop
+      unarchive:
+        src: "/tmp/hadoop-{{ hadoop_version }}.tar.gz"
+        dest: "{{ hadoop_home }}"
+        remote_src: yes
+        extra_opts: [--strip-components=1]
+      when: not hadoop_binary.stat.exists
+
+    - name: Supprimer l'archive temporaire
+      file:
+        path: "/tmp/hadoop-{{ hadoop_version }}.tar.gz"
+        state: absent
+      when: not hadoop_binary.stat.exists
+
+    - name: Configurer les variables d'environnement globales Hadoop
+      copy:
+        content: |
+          # Configuration globale Hadoop/HDFS (SSOT)
+          export JAVA_HOME=/usr/lib/jvm/java-11-openjdk-amd64
+          export HADOOP_HOME={{ hadoop_home }}
+          export HADOOP_CONF_DIR={{ hadoop_home }}/etc/hadoop
+          export PATH=$PATH:$HADOOP_HOME/bin:$HADOOP_HOME/sbin
+          # Heap bridé : nœuds e2-medium (4 Go) partagés avec K3s + Spark
+          export HADOOP_HEAPSIZE_MAX=512m
+        dest: /etc/profile.d/hadoop.sh
+        mode: '0644'
+
+    - name: Forcer JAVA_HOME dans hadoop-env.sh (les démons ne lisent pas /etc/profile.d)
+      lineinfile:
+        path: "{{ hadoop_home }}/etc/hadoop/hadoop-env.sh"
+        regexp: '^#?\s*export JAVA_HOME='
+        line: 'export JAVA_HOME=/usr/lib/jvm/java-11-openjdk-amd64'
+
+    - name: Déposer core-site.xml (fs.defaultFS = NameNode)
+      copy:
+        content: |
+          <?xml version="1.0"?>
+          <?xml-stylesheet type="text/xsl" href="configuration.xsl"?>
+          <configuration>
+            <property>
+              <name>fs.defaultFS</name>
+              <value>hdfs://{{ namenode_ip }}:9000</value>
+            </property>
+            <!-- Endpoint Prometheus natif Hadoop (/prom) pour Grafana -->
+            <property>
+              <name>hadoop.prometheus.endpoint.enabled</name>
+              <value>true</value>
+            </property>
+          </configuration>
+        dest: "{{ hadoop_home }}/etc/hadoop/core-site.xml"
+        mode: '0644'
+
+    - name: Déposer hdfs-site.xml
+      copy:
+        content: |
+          <?xml version="1.0"?>
+          <?xml-stylesheet type="text/xsl" href="configuration.xsl"?>
+          <configuration>
+            <property>
+              <name>dfs.replication</name>
+              <value>2</value>
+            </property>
+            <property>
+              <name>dfs.namenode.name.dir</name>
+              <value>file:///data/hdfs/namenode</value>
+            </property>
+            <property>
+              <name>dfs.datanode.data.dir</name>
+              <value>file:///data/hdfs/datanode</value>
+            </property>
+            <!-- Écoute sur toutes les interfaces (master + workers) -->
+            <property>
+              <name>dfs.namenode.rpc-bind-host</name>
+              <value>0.0.0.0</value>
+            </property>
+            <property>
+              <name>dfs.namenode.http-bind-host</name>
+              <value>0.0.0.0</value>
+            </property>
+            <property>
+              <name>dfs.datanode.address</name>
+              <value>0.0.0.0:9866</value>
+            </property>
+            <property>
+              <name>dfs.datanode.http.address</name>
+              <value>0.0.0.0:9864</value>
+            </property>
+            <!-- Le NameNode renvoie aux clients (pods Spark) des IP, pas des hostnames -->
+            <property>
+              <name>dfs.client.use.datanode.hostname</name>
+              <value>false</value>
+            </property>
+            <property>
+              <name>dfs.datanode.use.datanode.hostname</name>
+              <value>false</value>
+            </property>
+          </configuration>
+        dest: "{{ hadoop_home }}/etc/hadoop/hdfs-site.xml"
+        mode: '0644'
+
+# =====================================================================================
+# PLAY 2 : NameNode sur le Master
+# =====================================================================================
+- name: Configuration du NameNode HDFS (Master)
+  hosts: masters
+  become: yes
+  vars:
+    hadoop_home: "/opt/hadoop"
+  tasks:
+    - name: Créer le répertoire de métadonnées du NameNode
+      file:
+        path: /data/hdfs/namenode
+        state: directory
+        mode: '0755'
+
+    - name: Formater le NameNode (une seule fois — guardé pour ne JAMAIS reformater)
+      shell: "{{ hadoop_home }}/bin/hdfs namenode -format -force -nonInteractive"
+      args:
+        creates: /data/hdfs/namenode/current
+      environment:
+        JAVA_HOME: /usr/lib/jvm/java-11-openjdk-amd64
+        HADOOP_HOME: "{{ hadoop_home }}"
+
+    - name: Installer le service systemd hadoop-namenode
+      copy:
+        content: |
+          [Unit]
+          Description=Hadoop HDFS NameNode
+          After=network-online.target
+          Wants=network-online.target
+
+          [Service]
+          Type=simple
+          User=root
+          Environment=JAVA_HOME=/usr/lib/jvm/java-11-openjdk-amd64
+          Environment=HADOOP_HOME={{ hadoop_home }}
+          Environment=HADOOP_CONF_DIR={{ hadoop_home }}/etc/hadoop
+          Environment=HADOOP_HEAPSIZE_MAX=512m
+          ExecStart={{ hadoop_home }}/bin/hdfs namenode
+          Restart=on-failure
+          RestartSec=5
+
+          [Install]
+          WantedBy=multi-user.target
+        dest: /etc/systemd/system/hadoop-namenode.service
+        mode: '0644'
+
+    - name: Démarrer et activer le NameNode
+      systemd:
+        name: hadoop-namenode
+        state: started
+        enabled: yes
+        daemon_reload: yes
+
+# =====================================================================================
+# PLAY 3 : DataNodes sur les Workers
+# =====================================================================================
+- name: Configuration des DataNodes HDFS (Workers)
+  hosts: workers
+  become: yes
+  vars:
+    hadoop_home: "/opt/hadoop"
+  tasks:
+    - name: Créer le répertoire de données du DataNode
+      file:
+        path: /data/hdfs/datanode
+        state: directory
+        mode: '0755'
+
+    - name: Installer le service systemd hadoop-datanode
+      copy:
+        content: |
+          [Unit]
+          Description=Hadoop HDFS DataNode
+          After=network-online.target
+          Wants=network-online.target
+
+          [Service]
+          Type=simple
+          User=root
+          Environment=JAVA_HOME=/usr/lib/jvm/java-11-openjdk-amd64
+          Environment=HADOOP_HOME={{ hadoop_home }}
+          Environment=HADOOP_CONF_DIR={{ hadoop_home }}/etc/hadoop
+          Environment=HADOOP_HEAPSIZE_MAX=512m
+          ExecStart={{ hadoop_home }}/bin/hdfs datanode
+          Restart=on-failure
+          RestartSec=5
+
+          [Install]
+          WantedBy=multi-user.target
+        dest: /etc/systemd/system/hadoop-datanode.service
+        mode: '0644'
+
+    - name: Démarrer et activer le DataNode
+      systemd:
+        name: hadoop-datanode
+        state: started
+        enabled: yes
+        daemon_reload: yes
+
+# =====================================================================================
+# PLAY 4 : Bootstrap des données de démo dans HDFS (depuis le Master)
+# =====================================================================================
+- name: Chargement d'un jeu de données distribué dans HDFS
+  hosts: masters
+  become: yes
+  vars:
+    hadoop_home: "/opt/hadoop"
+  environment:
+    JAVA_HOME: /usr/lib/jvm/java-11-openjdk-amd64
+    HADOOP_HOME: "{{ hadoop_home }}"
+    HADOOP_CONF_DIR: "{{ hadoop_home }}/etc/hadoop"
+  tasks:
+    - name: Attendre que le NameNode sorte du safe mode
+      shell: "{{ hadoop_home }}/bin/hdfs dfsadmin -safemode wait"
+      changed_when: false
+
+    - name: Générer un fichier texte volumineux (~256 Mo → blocs répartis)
+      shell: |
+        yes "lorem ipsum dolor sit amet hadoop spark hdfs mapreduce yarn cluster distributed storage" \
+          | head -c 256000000 > /tmp/big.txt
+      args:
+        creates: /tmp/big.txt
+
+    - name: Créer le répertoire d'entrée dans HDFS
+      shell: "{{ hadoop_home }}/bin/hdfs dfs -mkdir -p /data/input"
+      register: mkdir_hdfs
+      changed_when: false
+
+    - name: Vérifier si le fichier de démo est déjà dans HDFS
+      shell: "{{ hadoop_home }}/bin/hdfs dfs -test -e /data/input/big.txt"
+      register: hdfs_file
+      failed_when: false
+      changed_when: false
+
+    - name: Charger le fichier dans HDFS (réparti en blocs sur les DataNodes)
+      shell: "{{ hadoop_home }}/bin/hdfs dfs -put -f /tmp/big.txt /data/input/big.txt"
+      when: hdfs_file.rc != 0
