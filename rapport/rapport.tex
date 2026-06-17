@@ -1,0 +1,249 @@
+\documentclass{name}
+\usepackage{lipsum}
+\usepackage{multicol}
+\usepackage{listings}
+\usepackage{longtable}
+\usepackage{amsmath}
+\usepackage{mathtools}
+\usepackage{geometry}
+\usepackage{float}
+\usepackage{amssymb}
+\usepackage[utf8]{inputenc}
+\usepackage{booktabs}
+\usepackage{array}
+\usepackage{caption}
+\usepackage{geometry}
+\usepackage{float}
+\geometry{margin=1in}
+\usepackage{setspace}
+\usepackage{stmaryrd}
+\usepackage[sorting=none]{biblatex}
+\addbibresource{bibliographie.bib}
+\usepackage{csquotes}
+\usepackage[english]{babel}
+\NoAutoSpaceBeforeFDP
+\usepackage[utf8]{inputenc}
+\usepackage[a4paper,left=2cm,right=2cm,top=2cm,bottom=2cm]{geometry}
+\usepackage[pdftex]{graphicx}
+\usepackage{fancyhdr}
+\usepackage{lmodern}
+\usepackage{color}
+\usepackage{float}
+\usepackage{algorithm}
+\usepackage{algorithmic}
+\usepackage{awesomebox}
+\usepackage{todonotes}
+\usepackage{upquote}
+\newtheorem{theorem}{Théorème}
+\newtheorem{remark}{Remarque}
+\newtheorem{definition}{Définition}
+
+\begin{document}
+%----------- Informations du rapport ---------
+
+\titre{Rapport de Projet -- Infrastructures pour le Cloud et le Big Data} %Titre du fichier .pdf
+
+\eleves{Marin \textsc{Decanini}\\Nolan \textsc{Carlisi}\\ Juin 2026} %Noms des élèves
+
+\enseignantenseirb{ \textsc{aa}\\\textsc{aa }}
+\enseignant{Boris \textsc{Teabe}} %Nom de l'enseignant
+
+
+
+%----------- Initialisation -------------------
+
+\fairemarges %Afficher les marges
+\fairepagedegarde %Créer la page de garde
+
+\newpage
+\setcounter{pagezero}{\value{0}}
+
+\begin{center}
+	\begin{minipage}{13cm}
+	    \begin{center}
+	        \section{Abstract}\\
+	    \end{center}
+			Ce rapport présente le déploiement complet d'une infrastructure Cloud et Big Data sur Google Cloud Platform (GCP), réalisée dans le cadre de l'UE Infrastructures pour le Cloud et le Big Data. Le projet couvre trois volets : (1) le provisionnement d'un cluster Kubernetes (K3s) sur des machines virtuelles GCE via Infrastructure as Code (OpenTofu/Terraform et Ansible), (2) le déploiement d'une chaîne de monitoring applicatif avec Prometheus et Grafana, et (3) le déploiement d'Apache Spark en mode cluster sur Kubernetes avec exécution du job WordCount, dont la charge CPU/mémoire et l'autoscaling dynamique des executors sont observés en temps réel sur les dashboards Grafana.
+	\end{minipage}
+\end{center}
+
+
+
+
+\par
+\setcounter{page}{\value{pagezero}}
+
+\newpage
+\setcounter{page}{\value{pagezero}}
+\tableofcontents
+
+\newpage
+\section{Introduction}
+
+Ce projet a pour objectif de consolider les connaissances acquises durant le cours en reproduisant, sur Google Cloud Platform, une chaîne de déploiement complète pour le Big Data : provisionnement d'infrastructure, orchestration Kubernetes, monitoring applicatif et exécution d'un job distribué Spark. Contrairement aux séances de TP réalisées sur AWS EC2 via le portail web, ce projet a été entièrement automatisé via de l'Infrastructure as Code (OpenTofu) et de la configuration déclarative (Ansible), afin de garantir un déploiement reproductible et versionné.
+
+L'architecture retenue suit une séparation stricte entre trois couches :
+\begin{itemize}
+    \item \textbf{Le contenant} (OpenTofu) : réseau VPC, sous-réseau, règles de pare-feu et instances Compute Engine ;
+    \item \textbf{Le contenu} (Ansible) : installation et configuration du cluster Kubernetes léger K3s, puis d'Apache Spark ;
+    \item \textbf{L'application} (Kubernetes) : déploiement de la pile de monitoring Prometheus/Grafana et exécution des jobs Spark.
+\end{itemize}
+
+\section{Partie I : Déploiement de Kubernetes sur un cluster de VM GCP}
+
+\subsection{Infrastructure réseau et machines virtuelles (OpenTofu)}
+
+Le contenant de l'infrastructure est entièrement décrit en Terraform/OpenTofu dans le répertoire \texttt{terraform/}. Nous avons fait le choix d'un cluster K3s (distribution Kubernetes légère de Rancher) plutôt que d'un Kubernetes managé (GKE), afin de rester fidèle à l'exercice pédagogique de provisionnement bas niveau réalisé en TP sur EC2, tout en gagnant en légèreté sur des instances modestes.
+
+L'infrastructure réseau (\texttt{network.tf}) définit :
+\begin{itemize}
+    \item un VPC dédié et isolé \texttt{k8s-vpc} avec création manuelle des sous-réseaux (\texttt{auto\_create\_subnetworks = false}) ;
+    \item un sous-réseau \texttt{k8s-subnet} en \texttt{10.0.1.0/24}, dans la région \texttt{europe-west9} (Paris) ;
+    \item quatre règles de pare-feu : autorisation de tout le trafic interne au VPC (requis par Kubernetes pour le réseau de pods/services), SSH externe (port 22), l'API Kubernetes K3s (port 6443) et les interfaces web (HTTP/HTTPS, Grafana sur 3000, l'UI Spark sur 8080, et la plage NodePort 30000-32767).
+\end{itemize}
+
+Le contenant compute (\texttt{compute.tf}) provisionne trois instances \texttt{e2-medium} (2 vCPU, 4 Go RAM) sous Ubuntu 22.04 LTS :
+\begin{itemize}
+    \item \texttt{k8s-master} avec IP interne statique \texttt{10.0.1.10} ;
+    \item \texttt{k8s-worker-1} et \texttt{k8s-worker-2} avec IPs internes statiques \texttt{10.0.1.11} et \texttt{10.0.1.12}.
+\end{itemize}
+
+L'attribution d'IPs internes statiques (plutôt que des IPs dynamiques DHCP) s'est révélée être un choix structurant pour tout le reste du projet : c'est cette IP fixe du master (\texttt{10.0.1.10}) qui est ensuite utilisée comme ancre stable dans la configuration K3s, dans \texttt{spark-defaults.conf}, et dans les scripts de démonstration, évitant toute redécouverte d'adresse à chaque redéploiement.
+
+Enfin, \texttt{outputs.tf} génère automatiquement le fichier \texttt{ansible/inventory.ini} à partir des IPs publiques attribuées par GCP (via un bloc \texttt{local\_file}), ce qui élimine toute étape manuelle entre le provisionnement et la configuration : un simple \texttt{tofu apply} suffit à préparer l'inventaire Ansible.
+
+\subsection{Configuration du cluster K3s (Ansible)}
+
+La couche de configuration est pilotée par le playbook racine \texttt{ansible/playbooks/site.yml}, qui orchestre séquentiellement quatre playbooks :
+
+\begin{enumerate}
+    \item \textbf{\texttt{common.yml}} : tâches communes à tous les nœuds — mise à jour du cache \texttt{apt}, installation des paquets de base (\texttt{curl}, \texttt{git}, \texttt{htop}, \texttt{iptables}), désactivation du swap (requis par Kubernetes) de façon immédiate et persistante dans \texttt{/etc/fstab}, et arrêt du pare-feu local \texttt{ufw} (la sécurité réseau étant déjà gérée au niveau GCP par les règles de pare-feu Terraform) ;
+    \item \textbf{\texttt{master.yml}} : installation de K3s en mode \texttt{server} via le script officiel \texttt{get.k3s.io}, avec l'option \texttt{--tls-san} pointant sur l'IP publique du master (pour que le certificat TLS reste valide lors d'un accès \texttt{kubectl} depuis l'extérieur du VPC), puis récupération et adaptation locale du \texttt{kubeconfig} (remplacement de \texttt{127.0.0.1} par l'IP publique) dans \texttt{\textasciitilde/.kube/config-projet-cloud} ;
+    \item \textbf{\texttt{worker.yml}} : installation de K3s en mode agent sur les deux workers, jonction au cluster via l'URL interne \texttt{https://10.0.1.10:6443} et le token partagé \texttt{K3S\_TOKEN} (défini en variable de groupe pour garantir la cohérence entre Terraform et Ansible) ;
+    \item \textbf{\texttt{spark.yml}} : préparation des workers et du master pour Apache Spark (détaillé en partie III).
+\end{enumerate}
+
+Chaque tâche d'installation est gardée par une vérification \texttt{stat} du binaire K3s, ce qui rend le playbook idempotent : il peut être rejoué sans risque sur un cluster déjà déployé, conformément à la philosophie « état exact requis » visée par Ansible.
+
+\begin{figure}[H]
+    \centering
+    \fbox{\rule{0.9\textwidth}{0pt}\rule{0pt}{4cm}}
+    \caption{\texttt{kubectl get nodes} après déploiement Ansible : un master et deux workers en état \texttt{Ready}.}
+    \label{fig:get-nodes}
+\end{figure}
+
+La figure~\ref{fig:get-nodes} confirme que les trois nœuds du cluster K3s sont opérationnels et joints au control-plane. Les rôles \texttt{control-plane,master} et \texttt{<none>} (worker) sont visibles dans la colonne \texttt{ROLES}, et la version K3s (\texttt{v1.28.2+k3s1}) est homogène sur les trois nœuds, ce qui valide la reproductibilité du déploiement Ansible.
+
+\section{Partie II : Monitoring applicatif avec Prometheus et Grafana}
+
+\subsection{Déploiement de la pile kube-prometheus-stack}
+
+Plutôt que d'installer Prometheus et Grafana manuellement, nous avons utilisé le chart Helm officiel de la communauté \texttt{kube-prometheus-stack}, qui package en une seule release l'opérateur Prometheus, Prometheus lui-même, Grafana, Alertmanager et node-exporter (collecte des métriques CPU/mémoire par nœud). Ce chart est déployé dans un namespace dédié \texttt{monitoring}, avec un fichier de valeurs personnalisé \texttt{k8s/prometheus/values.yaml} :
+
+\begin{lstlisting}[language=bash, basicstyle=\ttfamily\small]
+helm install kube-prometheus prometheus-community/kube-prometheus-stack \
+  -n monitoring -f k8s/prometheus/values.yaml
+\end{lstlisting}
+
+Deux choix de configuration méritent d'être justifiés. D'abord, l'activation du plugin Grafana \texttt{grafana-polystat-panel}, qui permet d'afficher l'usage CPU des nœuds et des pods sous forme de « nid d'abeille » (grille d'hexagones colorés selon un seuil), une représentation beaucoup plus lisible que des courbes empilées lorsqu'il s'agit de visualiser en direct l'apparition et la disparition de pods executors Spark. Ensuite, l'activation du sidecar de dashboards (\texttt{sidecar.dashboards.enabled: true}), qui surveille en continu les ConfigMaps labellisées \texttt{grafana\_dashboard=1} dans le cluster et les importe automatiquement dans Grafana sans redémarrage — ce mécanisme est exploité pour livrer notre dashboard personnalisé de façon déclarative (GitOps), plutôt que de le créer à la main dans l'UI.
+
+\subsection{Dashboard personnalisé « Nid d'abeille »}
+
+Le fichier \texttt{k8s/prometheus/honeycomb-dashboard.yaml} définit une \texttt{ConfigMap} contenant un dashboard Grafana au format JSON, avec deux panneaux \texttt{grafana-polystat-panel} :
+
+\begin{itemize}
+    \item \textbf{Panneau 1} -- Usage CPU des nœuds du cluster, basé sur la requête PromQL
+    \begin{lstlisting}[basicstyle=\ttfamily\small]
+100 * (1 - avg by(instance)(rate(node_cpu_seconds_total{mode="idle"}[2m])))
+\end{lstlisting}
+    jointe (\texttt{group\_left}) à \texttt{node\_uname\_info} pour afficher le nom du nœud plutôt que son adresse IP ;
+    \item \textbf{Panneau 2} -- Usage CPU des pods exécuteurs Spark, filtré par expression régulière sur le nom de pod (\texttt{pod=\textasciitilde".*-exec-.*"}) avec un \texttt{label\_replace} pour n'afficher que le suffixe \texttt{exec-N} dans la légende.
+\end{itemize}
+
+Le rafraîchissement du dashboard est fixé à 5 secondes (\texttt{"refresh": "5s"}) sur une fenêtre glissante de 15 minutes, ce qui est cohérent avec un intervalle de scrape Prometheus resserré (voir~\ref{sec:problemes}) : sans cela, les pods executors Spark, dont le cycle de vie peut être très court, n'apparaîtraient jamais sur le dashboard.
+
+\begin{figure}[H]
+    \centering
+    \fbox{\rule{0.9\textwidth}{0pt}\rule{0pt}{6cm}}
+    \caption{Dashboard Grafana « Nid d'abeille » : usage CPU par nœud (haut) et par pod executor Spark (bas), pendant l'exécution du job WordCount.}
+    \label{fig:honeycomb}
+\end{figure}
+
+Sur la figure~\ref{fig:honeycomb}, le panneau supérieur montre les trois nœuds du cluster avec une charge CPU qui passe du vert (idle) à l'orange/rouge sur le master et un worker pendant l'exécution du job. Le panneau inférieur fait apparaître dynamiquement des hexagones correspondant aux pods \texttt{...-exec-1} et \texttt{...-exec-2} : leur apparition/disparition en direct illustre concrètement le cycle de vie éphémère des executors Spark sur Kubernetes.
+
+\section{Partie III : Déploiement d'Apache Spark et exécution de WordCount}
+
+\subsection{Installation de Spark en mode cluster sur K3s}
+
+Le playbook \texttt{spark.yml} installe Apache Spark 3.4.0 (avec Hadoop 3) directement sur le master, en mode client/cluster Kubernetes natif — c'est-à-dire que le binaire \texttt{spark-submit} s'exécute sur la VM master, mais les executors sont des pods Kubernetes créés et détruits dynamiquement par le scheduler Spark-on-K8s (pas de DataNodes HDFS permanents, conformément à la consigne de déploiement « en mode cluster, avec plusieurs nœuds de calcul »).
+
+Les étapes clés de ce playbook sont :
+\begin{itemize}
+    \item pré-téléchargement (\texttt{prepull}) de l'image \texttt{apache/spark:v3.4.0} sur les deux workers via \texttt{k3s ctr images pull}, pour éviter un téléchargement à froid lors du premier \texttt{spark-submit} et garantir un démarrage quasi instantané des executors ;
+    \item installation d'OpenJDK 11 et extraction de la distribution Spark dans \texttt{/opt/spark} ;
+    \item écriture de \texttt{conf/spark-defaults.conf} fixant \texttt{spark.master} sur \texttt{k8s://https://10.0.1.10:6443} (l'API K3s, accessible en interne), l'image conteneur des executors, ainsi que les ressources par défaut (1 cœur / 1 Go par driver et par executor, dimensionnées pour ne pas saturer les \texttt{e2-medium}) ;
+    \item téléchargement des jars BouncyCastle (\texttt{bcprov}, \texttt{bcpkix}), nécessaires pour que la JVM Spark sache décoder les clés EC utilisées par les certificats TLS générés par K3s ;
+    \item création d'un \texttt{ServiceAccount} Kubernetes \texttt{spark} et d'un \texttt{ClusterRoleBinding} lui octroyant le rôle \texttt{edit}, condition nécessaire pour que le driver Spark soit autorisé à créer/détruire des pods executors.
+\end{itemize}
+
+\subsection{Problèmes rencontrés et résolution}
+\label{sec:problemes}
+
+Le déploiement initial du job WordCount a révélé deux problèmes bloquants, documentés et corrigés au fil du projet.
+
+\textbf{Problème 1 -- Résolution DNS du driver Spark en mode client.} Le premier essai de \texttt{spark-submit} en \texttt{--deploy-mode client} échouait : les pods executors ne parvenaient jamais à se connecter au driver, avec une erreur \texttt{UnknownHostException} sur le FQDN interne GCP du master (\texttt{k8s-master.europe-west9-b.c.<projet>.internal}). En effet, par défaut Spark fait annoncer au driver son propre nom DNS système, qui n'est résolvable que depuis l'extérieur du cluster K3s -- les pods executors, eux, n'ont pas accès au DNS interne GCP. Conséquence : aucun executor ne se connectait jamais réellement, et donc aucune charge CPU/mémoire n'était générée pour le monitoring.
+
+\emph{Correctif appliqué} : forcer le driver à s'annoncer via l'IP interne statique et stable du VPC plutôt que son nom DNS, en ajoutant au \texttt{spark-submit} :
+\begin{lstlisting}[basicstyle=\ttfamily\small]
+--conf spark.driver.host=10.0.1.10 \
+--conf spark.driver.bindAddress=0.0.0.0
+\end{lstlisting}
+Cette IP étant routable depuis le réseau de pods K3s (règle de pare-feu \texttt{allow\_internal}), les executors parviennent désormais à joindre le driver.
+
+\textbf{Problème 2 -- Charge trop courte pour être échantillonnée.} Même une fois la connectivité corrigée, le jeu de données d'exemple \texttt{people.txt} (quelques lignes) faisait tourner le job WordCount en quelques secondes seulement, executors compris : avec un intervalle de scrape Prometheus par défaut de 30 secondes, la fenêtre de vie des pods executors était systématiquement plus courte que l'intervalle de collecte -- Prometheus ne capturait donc jamais d'échantillon « actif », et Grafana restait visuellement vide malgré un job qui s'exécutait correctement.
+
+\emph{Correctifs appliqués} : (i) réduction de l'intervalle de scrape à 5 secondes côté Prometheus ; (ii) fixation explicite de 2 executors stables et désactivation de l'allocation dynamique (\texttt{spark.dynamicAllocation.enabled=false}, \texttt{spark.executor.instances=2}) pour le job de démonstration WordCount, afin de garantir une fenêtre d'observation prévisible ; (iii) répétition du job en boucle (10 itérations, voir \texttt{demo/3\_run\_wordcount.sh}) pour étaler la charge sur 1 à 2 minutes plutôt que quelques secondes.
+
+\subsection{Scripts de démonstration}
+
+Pour la soutenance orale, le déploiement Spark est piloté par quatre scripts dans \texttt{demo/}, exécutés dans l'ordre :
+
+\begin{enumerate}
+    \item \texttt{1\_start\_port\_forward.sh} : ouvre un tunnel \texttt{kubectl port-forward} vers le pod Grafana (port 3000) et l'affiche dans le navigateur ;
+    \item \texttt{2\_watch\_pods.sh} : exécute \texttt{kubectl get pods -w} sur le namespace \texttt{default}, pour observer en direct l'apparition/disparition des pods executors, en complément du dashboard Grafana ;
+    \item \texttt{3\_run\_wordcount.sh} : se connecte en SSH sur le master et lance le job WordCount avec les correctifs de la section~\ref{sec:problemes} (IP fixe du driver, 2 executors stables, 10 itérations) ;
+    \item \texttt{4\_run\_heavy\_autoscale.sh} : démontre l'autoscaling dynamique des executors avec un job SparkPi à 8000 partitions, en activant \texttt{spark.dynamicAllocation.enabled=true} avec \texttt{minExecutors=1}, \texttt{maxExecutors=5}, \texttt{schedulerBacklogTimeout=5s} et \texttt{executorIdleTimeout=30s}. Le grand nombre de partitions (tâches très courtes, $\sim$50ms chacune) crée un backlog de tâches en attente suffisamment long ($\sim$2 minutes) pour que Spark réclame progressivement des executors supplémentaires jusqu'au plafond fixé, avant de les libérer dès que la charge retombe.
+\end{enumerate}
+
+\begin{figure}[H]
+    \centering
+    \fbox{\rule{0.9\textwidth}{0pt}\rule{0pt}{6cm}}
+    \caption{\texttt{kubectl get pods -w} pendant \texttt{4\_run\_heavy\_autoscale.sh} : montée progressive de 1 à 5 pods executors puis scale-down après la fin du job.}
+    \label{fig:autoscale-pods}
+\end{figure}
+
+La figure~\ref{fig:autoscale-pods} illustre la montée en charge : les pods \texttt{...-exec-1} à \texttt{...-exec-5} apparaissent à des instants échelonnés (au rythme du \texttt{schedulerBacklogTimeout} de 5s), restent en état \texttt{Running} pendant le traitement du backlog de tâches SparkPi, puis passent en \texttt{Terminating} environ 30 secondes après l'épuisement des tâches (délai fixé par \texttt{executorIdleTimeout}). Ce comportement valide que l'autoscaling Spark-on-Kubernetes fonctionne nativement, sans recours à un Horizontal Pod Autoscaler Kubernetes : c'est directement le driver Spark qui pilote la création/destruction des pods via l'API Kubernetes, en fonction de la pression de la file de tâches.
+
+\begin{figure}[H]
+    \centering
+    \fbox{\rule{0.9\textwidth}{0pt}\rule{0pt}{6cm}}
+    \caption{Vue Grafana « Nid d'abeille » pendant l'autoscaling : le nombre d'hexagones actifs sur le panneau executors croît de 1 à 5 puis redescend, en corrélation avec le pic CPU visible sur le panneau nœuds.}
+    \label{fig:autoscale-grafana}
+\end{figure}
+
+\section{Partie IV : Répartition du travail}
+
+Le projet a été réalisé à deux, avec une répartition équilibrée des tâches, chacun intervenant ponctuellement en relecture/débogage sur les parties de l'autre :
+
+\begin{itemize}
+    \item \textbf{Marin Decanini (50\%)} : conception et écriture de l'infrastructure OpenTofu (réseau, instances, génération d'inventaire), playbooks Ansible \texttt{common.yml}/\texttt{master.yml}/\texttt{worker.yml}, diagnostic et correction du problème de résolution DNS du driver Spark, scripts de démonstration \texttt{3\_run\_wordcount.sh} et \texttt{4\_run\_heavy\_autoscale.sh}.
+    \item \textbf{Nolan Carlisi (50\%)} : playbook Ansible \texttt{spark.yml} (installation Spark, ServiceAccount Kubernetes, jars BouncyCastle), déploiement de la pile \texttt{kube-prometheus-stack} et configuration des \texttt{values.yaml}, conception du dashboard Grafana « nid d'abeille » personnalisé, scripts \texttt{1\_start\_port\_forward.sh} et \texttt{2\_watch\_pods.sh}.
+\end{itemize}
+
+La rédaction du présent rapport a été partagée à parts égales entre les deux membres du groupe.
+
+\section{Conclusion}
+
+Ce projet nous a permis de mettre en pratique l'ensemble de la chaîne Cloud/Big Data vue en cours, depuis le provisionnement bas niveau d'une infrastructure GCP jusqu'à l'exécution observable d'un job distribué Spark, en passant par l'automatisation complète (Terraform + Ansible) et le monitoring temps réel (Prometheus + Grafana). La principale difficulté technique a résidé dans la compréhension fine du modèle réseau de Spark-on-Kubernetes en mode client (résolution DNS du driver) et dans le réglage des paramètres temporels de l'autoscaling dynamique pour le rendre observable à l'échelle d'une démonstration orale. Le caractère idempotent des playbooks Ansible et la génération automatique de l'inventaire par Terraform garantissent par ailleurs que l'ensemble de cette infrastructure peut être détruite (\texttt{tofu destroy}) et redéployée à l'identique en quelques minutes.
+
+\end{document}

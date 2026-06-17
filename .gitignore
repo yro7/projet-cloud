@@ -4,3 +4,4 @@ SSOT.md
 *.lock
 .terraform
 .terraform.lock.hcl
+problems.md

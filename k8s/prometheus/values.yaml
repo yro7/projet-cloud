@@ -1,0 +1,14 @@
+# Valeurs Helm pour le chart kube-prometheus-stack (release: kube-prometheus)
+# Appliquer : helm upgrade kube-prometheus prometheus-community/kube-prometheus-stack \
+#               -n monitoring -f k8s/prometheus/values.yaml
+grafana:
+  adminPassword: admin
+  # Plugin panneau "nid d'abeille" (hexagones) pour la vue Overview des noeuds.
+  plugins:
+    - grafana-polystat-panel
+  # Le sidecar importe automatiquement les ConfigMaps labellisés grafana_dashboard=1
+  # (voir k8s/prometheus/honeycomb-dashboard.yaml).
+  sidecar:
+    dashboards:
+      enabled: true
+      label: grafana_dashboard
