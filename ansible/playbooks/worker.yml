@@ -1,6 +1,6 @@
 ---
-- name: Déploiement des Workers K3s
-  hosts: workers
+- name: Déploiement des Workers K3s (workers + nœud monitoring)
+  hosts: workers:monitoring
   become: yes
   tasks:
     - name: Vérifier si K3s est déjà installé sur le Worker

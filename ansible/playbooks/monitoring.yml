@@ -1,0 +1,30 @@
+---
+# Dédie le nœud k8s-monitor au monitoring :
+#  - label role=monitoring  -> cible des pods Prometheus/Grafana (nodeSelector)
+#  - taint dedicated=monitoring:NoSchedule -> rien d'autre n'y est planifié
+# Exécuté depuis le master (là où kubectl/k3s est configuré).
+- name: Dédier le nœud monitoring (label + taint)
+  hosts: masters
+  become: yes
+  vars:
+    kubeconfig: /etc/rancher/k3s/k3s.yaml
+  tasks:
+    - name: Attendre que le nœud k8s-monitor soit enregistré et Ready
+      shell: |
+        k3s kubectl wait --for=condition=Ready node/k8s-monitor --timeout=180s
+      environment:
+        KUBECONFIG: "{{ kubeconfig }}"
+      register: node_ready
+      retries: 5
+      delay: 10
+      until: node_ready.rc == 0
+
+    - name: Labelliser le nœud comme rôle monitoring
+      shell: k3s kubectl label node k8s-monitor role=monitoring --overwrite
+      environment:
+        KUBECONFIG: "{{ kubeconfig }}"
+
+    - name: Taint NoSchedule (nœud réservé au monitoring)
+      shell: k3s kubectl taint node k8s-monitor dedicated=monitoring:NoSchedule --overwrite
+      environment:
+        KUBECONFIG: "{{ kubeconfig }}"

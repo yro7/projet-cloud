@@ -1,7 +1,4 @@
-projetmodia.md
-var.md
-SSOT.md
+
 *.lock
 .terraform
 .terraform.lock.hcl
-problems.md

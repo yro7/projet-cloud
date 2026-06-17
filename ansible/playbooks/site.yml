@@ -10,6 +10,9 @@
 - name: Configuration et déploiement des nœuds Workers (Agents)
   import_playbook: worker.yml
 
+- name: Dédier le nœud monitoring (label + taint)
+  import_playbook: monitoring.yml
+
 - name: Déploiement et configuration d'Apache Spark
   import_playbook: spark.yml
 

@@ -1,6 +1,11 @@
 # Valeurs Helm pour le chart kube-prometheus-stack (release: kube-prometheus)
 # Appliquer : helm upgrade kube-prometheus prometheus-community/kube-prometheus-stack \
 #               -n monitoring -f k8s/prometheus/values.yaml
+# ---------------------------------------------------------------------------
+# Toute la stack monitoring est épinglée sur le nœud dédié k8s-monitor
+# (label role=monitoring + taint dedicated=monitoring:NoSchedule), afin de
+# décharger les nœuds Spark/HDFS. node-exporter (DaemonSet) reste partout.
+# ---------------------------------------------------------------------------
 grafana:
   adminPassword: admin
   # Plugin panneau "nid d'abeille" (hexagones) pour la vue Overview des noeuds.
@@ -12,12 +17,29 @@ grafana:
     dashboards:
       enabled: true
       label: grafana_dashboard
+  nodeSelector:
+    role: monitoring
+  tolerations:
+    - key: dedicated
+      operator: Equal
+      value: monitoring
+      effect: NoSchedule
 
 # Scrape des métriques HDFS via l'endpoint natif Hadoop /prom
 # (active par hadoop.prometheus.endpoint.enabled=true dans core-site.xml).
 # Le pod Prometheus joint les IP des noeuds (10.0.1.x) en SNAT -> firewall interne OK.
 prometheus:
   prometheusSpec:
+    # Scrape rapide pour un honeycomb fluide : OK maintenant que Prometheus
+    # tourne sur son nœud dédié (k8s-monitor), sans charger Spark/HDFS.
+    scrapeInterval: 5s
+    nodeSelector:
+      role: monitoring
+    tolerations:
+      - key: dedicated
+        operator: Equal
+        value: monitoring
+        effect: NoSchedule
     additionalScrapeConfigs:
       - job_name: hdfs-namenode
         metrics_path: /prom
@@ -37,3 +59,40 @@ prometheus:
             labels:
               hdfs_role: datanode
               node: k8s-worker-2
+
+# Alertmanager épinglé sur le nœud monitoring
+alertmanager:
+  alertmanagerSpec:
+    nodeSelector:
+      role: monitoring
+    tolerations:
+      - key: dedicated
+        operator: Equal
+        value: monitoring
+        effect: NoSchedule
+
+# Operator kube-prometheus épinglé sur le nœud monitoring
+prometheusOperator:
+  nodeSelector:
+    role: monitoring
+  tolerations:
+    - key: dedicated
+      operator: Equal
+      value: monitoring
+      effect: NoSchedule
+
+# kube-state-metrics épinglé sur le nœud monitoring
+kube-state-metrics:
+  nodeSelector:
+    role: monitoring
+  tolerations:
+    - key: dedicated
+      operator: Equal
+      value: monitoring
+      effect: NoSchedule
+
+# node-exporter = DaemonSet : doit tourner sur TOUS les nœuds, y compris le
+# nœud monitoring tainté (sinon pas de métriques CPU pour lui dans le honeycomb).
+prometheus-node-exporter:
+  tolerations:
+    - operator: Exists

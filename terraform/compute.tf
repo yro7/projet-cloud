@@ -34,6 +34,12 @@ resource "google_compute_instance" "master" {
   tags = ["k8s-node", "k8s-master"]
 
   description = "Nœud Master (Control Plane) du cluster Kubernetes"
+
+  # L'image ubuntu-2204-lts pointe vers la dernière publiée par GCP : on ignore
+  # sa dérive pour ne JAMAIS recréer une VM existante (perte du cluster) sur apply.
+  lifecycle {
+    ignore_changes = [boot_disk[0].initialize_params[0].image]
+  }
 }
 
 # 2. Instances Workers (Agents)
@@ -69,4 +75,44 @@ resource "google_compute_instance" "workers" {
 
   # Les workers dépendent du master pour le réseau, bien que cela soit géré au niveau d'Ansible
   depends_on = [google_compute_instance.master]
+
+  lifecycle {
+    ignore_changes = [boot_disk[0].initialize_params[0].image]
+  }
+}
+
+# 3. Instance Monitoring dédiée (Prometheus/Grafana isolés du plan de calcul)
+resource "google_compute_instance" "monitor" {
+  name         = "k8s-monitor"
+  machine_type = var.worker_machine_type # e2-medium (2 vCPU / 4 Go)
+  zone         = var.zone
+
+  boot_disk {
+    initialize_params {
+      image = data.google_compute_image.ubuntu.self_link
+      size  = 30
+      type  = "pd-standard"
+    }
+  }
+
+  network_interface {
+    subnetwork = google_compute_subnetwork.subnet.id
+    network_ip = "10.0.1.13" # IP interne statique du nœud monitoring
+
+    access_config {}
+  }
+
+  metadata = {
+    ssh-keys = "${var.ssh_username}:${file(pathexpand(var.ssh_public_key_file))}"
+  }
+
+  tags = ["k8s-node", "k8s-monitor"]
+
+  description = "Nœud dédié au monitoring (Prometheus/Grafana), isolé des nœuds Spark/HDFS"
+
+  depends_on = [google_compute_instance.master]
+
+  lifecycle {
+    ignore_changes = [boot_disk[0].initialize_params[0].image]
+  }
 }
