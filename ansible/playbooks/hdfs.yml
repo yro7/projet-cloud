@@ -190,6 +190,9 @@
           ExecStart={{ hadoop_home }}/bin/hdfs namenode
           Restart=on-failure
           RestartSec=5
+          # Protege le NameNode de l'OOM killer : un driver Spark gourmand
+          # sera tue avant le NameNode (HDFS reste debout).
+          OOMScoreAdjust=-800
 
           [Install]
           WantedBy=multi-user.target
@@ -236,6 +239,8 @@
           ExecStart={{ hadoop_home }}/bin/hdfs datanode
           Restart=on-failure
           RestartSec=5
+          # Protege le DataNode de l'OOM killer (avant les executors Spark)
+          OOMScoreAdjust=-700
 
           [Install]
           WantedBy=multi-user.target

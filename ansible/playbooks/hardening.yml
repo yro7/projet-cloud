@@ -1,0 +1,108 @@
+---
+# Durcissement mémoire des nœuds : éviter qu'un driver Spark gourmand ne fasse
+# tomber le control-plane K3s ou HDFS via l'OOM killer (les nœuds n'ont pas de swap).
+# - OOMScoreAdjust négatif sur k3s + HDFS => l'OOM killer tue le driver Spark en premier.
+# - Petit swapfile sur le master => filet contre les pics mémoire du driver.
+
+# =====================================================================================
+# PLAY 1 : Protéger k3s (+ HDFS) de l'OOM killer sur TOUS les nœuds
+# =====================================================================================
+- name: Protection OOM des services critiques (k3s, NameNode, DataNode)
+  hosts: all
+  become: yes
+  tasks:
+    - name: Détecter le nom du service k3s (server sur master, agent sur les autres)
+      shell: |
+        systemctl list-units --type=service --all 2>/dev/null \
+          | grep -oE 'k3s(-agent)?\.service' | head -1
+      register: k3s_svc
+      changed_when: false
+
+    - name: Créer le répertoire du drop-in systemd pour k3s
+      file:
+        path: "/etc/systemd/system/{{ k3s_svc.stdout }}.d"
+        state: directory
+        mode: '0755'
+      when: k3s_svc.stdout | length > 0
+
+    - name: Drop-in OOMScoreAdjust pour k3s (persistant au reboot)
+      copy:
+        content: |
+          [Service]
+          # Control-plane / agent K3s : protégé en priorité de l'OOM killer.
+          OOMScoreAdjust=-999
+        dest: "/etc/systemd/system/{{ k3s_svc.stdout }}.d/oom.conf"
+        mode: '0644'
+      when: k3s_svc.stdout | length > 0
+      register: k3s_oom_dropin
+
+    - name: Recharger systemd (prise en compte au prochain (re)start, sans redémarrer maintenant)
+      systemd:
+        daemon_reload: yes
+      when: k3s_oom_dropin is changed
+
+    - name: Appliquer immédiatement l'OOM score aux process déjà en cours (sans restart)
+      shell: |
+        apply() { for pid in $(pgrep -f "$1" 2>/dev/null); do echo "$2" > /proc/$pid/oom_score_adj 2>/dev/null || true; done; }
+        apply "k3s server" -999
+        apply "k3s agent"  -999
+        apply "NameNode"   -800
+        apply "DataNode"   -700
+        echo done
+      changed_when: false
+
+# =====================================================================================
+# PLAY 2 : Swapfile filet de sécurité sur le Master (driver + NameNode + k3s server)
+# =====================================================================================
+- name: Swapfile de sécurité sur le master
+  hosts: masters
+  become: yes
+  vars:
+    swapfile_size_mb: 2048
+  tasks:
+    - name: Vérifier si du swap est déjà actif
+      shell: swapon --show=NAME --noheadings | grep -q . && echo present || echo absent
+      register: swap_state
+      changed_when: false
+
+    - name: Créer le swapfile (2 Go)
+      command: "fallocate -l {{ swapfile_size_mb }}M /swapfile"
+      args:
+        creates: /swapfile
+      when: swap_state.stdout == "absent"
+
+    - name: Permissions strictes sur le swapfile
+      file:
+        path: /swapfile
+        mode: '0600'
+      when: swap_state.stdout == "absent"
+
+    - name: Formater le swapfile
+      command: mkswap /swapfile
+      when: swap_state.stdout == "absent"
+
+    - name: Activer le swap
+      command: swapon /swapfile
+      when: swap_state.stdout == "absent"
+
+    - name: Rendre le swap persistant (fstab)
+      lineinfile:
+        path: /etc/fstab
+        line: "/swapfile none swap sw 0 0"
+        state: present
+
+    - name: Vérifier l'existence d'un config.yaml K3s (ne pas l'écraser s'il existe)
+      stat:
+        path: /etc/rancher/k3s/config.yaml
+      register: k3s_config
+
+    - name: Tolérer le swap côté kubelet K3s (sécurité au reboot) — créé seulement si absent
+      copy:
+        content: |
+          kubelet-arg:
+            - "fail-swap-on=false"
+        dest: /etc/rancher/k3s/config.yaml
+        mode: '0644'
+      when: not k3s_config.stat.exists
+      # Note : appliqué au prochain (re)start de k3s, pas de restart forcé ici.
+      # Si un config.yaml existe déjà, ajouter manuellement: kubelet-arg: ["fail-swap-on=false"]

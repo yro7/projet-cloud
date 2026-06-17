@@ -19,3 +19,6 @@
 - name: Déploiement d'un cluster HDFS distribué (NameNode + DataNodes)
   import_playbook: hdfs.yml
 
+- name: Durcissement mémoire (protection OOM + swap)
+  import_playbook: hardening.yml
+
