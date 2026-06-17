@@ -67,6 +67,7 @@ resource "google_compute_firewall" "allow_web" {
       "80",          # HTTP standard
       "443",         # HTTPS standard
       "3000",        # Port par défaut Grafana
+      "4040",        # Spark UI du driver (DAG, stages, tasks) pendant un job
       "8080",        # Port par défaut UI Spark
       "9870",        # UI Web du NameNode HDFS
       "30000-32767"  # Plage par défaut NodePorts Kubernetes
